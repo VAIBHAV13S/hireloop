@@ -1,0 +1,82 @@
+# Docker Compose for HireLoop Development Environment
+
+version: "3.9"
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: hireloop
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d hireloop"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    command: uvicorn hireloop.apps.api.app.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - .:/app/hireloop
+      - ./data:/app/data
+    ports:
+      - "8000:8000"
+    environment:
+      - POSTGRES_HOST=db
+      - REDIS_HOST=redis
+      - JWT_SECRET_KEY=super-secret-key-hireloop-dev
+      - PYTHONPATH=/app
+      - DATA_STORAGE_DIR=/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: celery -A hireloop.apps.api.app.workers.celery worker --loglevel=info
+    volumes:
+      - .:/app/hireloop
+      - ./data:/app/data
+    environment:
+      - POSTGRES_HOST=db
+      - REDIS_HOST=redis
+      - JWT_SECRET_KEY=super-secret-key-hireloop-dev
+      - PYTHONPATH=/app
+      - DATA_STORAGE_DIR=/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    image: node:20-alpine
+    working_dir: /app
+    command: sh -c "npm install && npm run dev"
+    volumes:
+      - ./apps/web:/app
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:

@@ -1,0 +1,11 @@
+{
+  "name": "hireloop",
+  "version": "0.1.0",
+  "scripts": {
+    "build": "python -m compileall apps evals tests -q"
+  },
+  "dependencies": {
+    "@neon/config": "^1.14.6",
+    "@neon/env": "^2.1.9"
+  }
+}

@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: hireloop
+    env: python
+    runtime: python-3.12
+    plan: free
+    buildCommand: pip install -U pip && pip install -r requirements.txt
+    startCommand: uvicorn hireloop.apps.api.app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHONPATH
+        value: .
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
