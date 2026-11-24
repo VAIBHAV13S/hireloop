@@ -1,45 +1,27 @@
-# Dockerfile for HireLoop API & Workers
-
-FROM python:3.12-slim AS builder
+# Production Dockerfile for HireLoop API
+FROM python:3.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
+    curl \
     gcc \
     python3-dev \
-    curl \
     poppler-utils && \
     rm -rf /var/lib/apt/lists/*
 
-ENV POETRY_HOME=/opt/poetry
-RUN curl -sSL https://install.python-poetry.org | python3 - && \
-    ln -s $POETRY_HOME/bin/poetry /usr/local/bin/poetry
-
-WORKDIR /build
-COPY pyproject.toml ./
-RUN poetry export -f requirements.txt --output requirements.txt --without-hashes && \
-    pip install --no-cache-dir -r requirements.txt
-
-# ---- Runtime stage ----
-FROM python:3.12-slim AS runtime
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    poppler-utils \
-    curl && \
-    rm -rf /var/lib/apt/lists/*
-
-RUN useradd -m appuser && mkdir -p /app/hireloop /app/data && chown -R appuser:appuser /app
-USER appuser
 WORKDIR /app
 
-COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
+# Install dependencies using pre-generated requirements.txt for fast, reliable builds
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -U pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-# Copy repository into /app/hireloop so package name resolves correctly
-COPY . /app/hireloop
+# Copy application source code
+COPY . /app
 
 ENV PYTHONPATH=/app
-ENV DATA_STORAGE_DIR=/app/data
+ENV PORT=8000
 
 EXPOSE 8000
 
-CMD ["uvicorn", "hireloop.apps.api.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Start server dynamically on Render's assigned $PORT
+CMD ["sh", "-c", "uvicorn hireloop.apps.api.app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
