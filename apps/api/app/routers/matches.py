@@ -48,10 +48,14 @@ async def get_matches(
             target_vector = list(profile.profile_embedding)
 
     if not target_vector:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No candidate profile embedding found. Please upload a resume first or pass profile_vec.",
-        )
+        if query and query.strip():
+            embedder = get_embedder()
+            target_vector = await embedder.embed_text(query.strip())
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No candidate profile embedding found. Please upload a resume first or provide a search query.",
+            )
 
     matches = await get_ranked_matches(
         profile_vec=target_vector,
