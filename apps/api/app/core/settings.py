@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
     # LLM API keys (Optional - fallback to deterministic heuristics if unset)
+    GEMINI_API_KEY: str = Field(default="", alias="GEMINI_API_KEY")
+    GEMINI_MODEL: str = Field(default="gemini-1.5-flash", alias="GEMINI_MODEL")
     ANTHROPIC_API_KEY: str = Field(default="", alias="ANTHROPIC_API_KEY")
     OPENAI_API_KEY: str = Field(default="", alias="OPENAI_API_KEY")
 

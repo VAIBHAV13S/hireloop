@@ -64,8 +64,16 @@ async def run_agent_loop(
         db.add(user_msg_record)
         await db.commit()
 
-        # Check if external LLM client is available
-        if settings.ANTHROPIC_API_KEY:
+        # Check if external LLM client is available: Gemini (Free) -> Anthropic -> OpenAI -> Deterministic
+        if settings.GEMINI_API_KEY:
+            try:
+                async for sse in _run_gemini_loop(user_message, system_prompt, user_id, conversation_id, db):
+                    yield sse
+            except Exception as e:
+                logger.warning(f"Gemini agent loop encountered error: {e}. Falling back to deterministic agent.")
+                async for sse in _run_deterministic_agent(user_message, user_id, conversation_id, db):
+                    yield sse
+        elif settings.ANTHROPIC_API_KEY:
             async for sse in _run_anthropic_loop(user_message, system_prompt, user_id, conversation_id, db):
                 yield sse
         elif settings.OPENAI_API_KEY:
@@ -80,6 +88,136 @@ async def run_agent_loop(
         logger.exception(f"Error in agent execution turn: {exc}")
         yield format_sse("error", {"error": str(exc)})
         yield format_sse("done", {"message": "Agent turn aborted on error."})
+
+def _clean_schema_for_gemini(schema: Any) -> Any:
+    """Recursively formats JSON schema types to uppercase and strips unsupported keys for Gemini API."""
+    if isinstance(schema, dict):
+        cleaned = {}
+        for k, v in schema.items():
+            if k == "type" and isinstance(v, str):
+                cleaned["type"] = v.upper()
+            elif k == "default":
+                # Remove default to prevent Gemini parameter schema validation rejection
+                continue
+            elif k in ("properties", "patternProperties") and isinstance(v, dict):
+                cleaned[k] = {prop_name: _clean_schema_for_gemini(prop_val) for prop_name, prop_val in v.items()}
+            elif k == "items":
+                cleaned["items"] = _clean_schema_for_gemini(v)
+            else:
+                cleaned[k] = _clean_schema_for_gemini(v)
+        return cleaned
+    elif isinstance(schema, list):
+        return [_clean_schema_for_gemini(item) for item in schema]
+    return schema
+
+async def _run_gemini_loop(
+    user_message: str,
+    system_prompt: str,
+    user_id: uuid.UUID,
+    conversation_id: uuid.UUID,
+    db: AsyncSession,
+) -> AsyncGenerator[str, None]:
+    """Execute ReAct loop using Google Gemini Free API with function calling."""
+    import httpx
+
+    gemini_tools = [
+        {
+            "name": t["name"],
+            "description": t["description"],
+            "parameters": _clean_schema_for_gemini(t["parameters"]),
+        }
+        for t in AGENT_TOOL_DEFINITIONS
+    ]
+
+    model_name = settings.GEMINI_MODEL or "gemini-1.5-flash"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={settings.GEMINI_API_KEY}"
+
+    contents: List[Dict[str, Any]] = [
+        {"role": "user", "parts": [{"text": user_message}]}
+    ]
+    final_text = ""
+
+    async with httpx.AsyncClient(timeout=35.0) as client:
+        for step in range(MAX_STEPS):
+            payload = {
+                "systemInstruction": {
+                    "parts": [{"text": system_prompt}]
+                },
+                "contents": contents,
+                "tools": [
+                    {
+                        "functionDeclarations": gemini_tools
+                    }
+                ]
+            }
+
+            resp = await client.post(url, json=payload)
+            if resp.status_code != 200:
+                logger.error(f"Gemini API returned status {resp.status_code}: {resp.text[:300]}")
+                if step == 0:
+                    async for sse in _run_deterministic_agent(user_message, user_id, conversation_id, db):
+                        yield sse
+                    return
+                break
+
+            data = resp.json()
+            candidates = data.get("candidates", [])
+            if not candidates:
+                break
+
+            cand_content = candidates[0].get("content", {})
+            parts = cand_content.get("parts", [])
+
+            # Extract any text response parts
+            text_parts = [p.get("text", "") for p in parts if "text" in p]
+            if text_parts:
+                delta = " ".join(text_parts)
+                final_text += delta
+                yield format_sse("token", {"delta": delta})
+
+            # Check for function calls
+            func_calls = [p.get("functionCall") for p in parts if "functionCall" in p]
+            if not func_calls:
+                break
+
+            # Append model turn to conversation history
+            contents.append({"role": "model", "parts": parts})
+
+            # Execute tools in turn
+            func_responses = []
+            for fc in func_calls:
+                tool_name = fc.get("name")
+                tool_args = fc.get("args", {})
+
+                yield format_sse("tool_start", {"tool": tool_name, "args": tool_args})
+                result = await execute_agent_tool(tool_name, tool_args, user_id=user_id, db=db)
+                yield format_sse("tool_result", {"tool": tool_name, "result": result})
+
+                func_responses.append({
+                    "functionResponse": {
+                        "name": tool_name,
+                        "response": {
+                            "name": tool_name,
+                            "content": result,
+                        }
+                    }
+                })
+
+            contents.append({
+                "role": "function",
+                "parts": func_responses
+            })
+
+    # Persist Assistant Message
+    assistant_msg = Message(
+        conversation_id=conversation_id,
+        role="assistant",
+        content={"text": final_text},
+    )
+    db.add(assistant_msg)
+    await db.commit()
+
+    yield format_sse("done", {"message": final_text})
 
 async def _run_anthropic_loop(
     user_message: str,
