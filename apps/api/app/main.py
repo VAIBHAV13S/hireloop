@@ -74,5 +74,24 @@ async def healthz():
 
 @app.get("/readyz", status_code=status.HTTP_200_OK, tags=["Operations"])
 async def readyz():
-    """Readiness probe: verifies dependencies and configurations are loaded."""
-    return {"status": "ready", "app": settings.PROJECT_NAME}
+    """Readiness probe: verifies database connection and dependency loading."""
+    db_connected = False
+    db_error = None
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+            db_connected = True
+    except Exception as e:
+        db_error = str(e)
+
+    masked_host = "not-configured (using local default)"
+    if settings.RAW_DATABASE_URL:
+        masked_host = settings.RAW_DATABASE_URL.split("@")[-1].split("/")[0]
+
+    return {
+        "status": "ready" if db_connected else "degraded",
+        "database_connected": db_connected,
+        "database_host": masked_host,
+        "error": db_error,
+        "app": settings.PROJECT_NAME,
+    }
