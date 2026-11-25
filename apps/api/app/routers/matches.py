@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from hireloop.apps.api.app.db.session import get_db
 from hireloop.apps.api.app.models.models import User, CandidateProfile, MatchFeedback, Job
 from hireloop.apps.api.app.services.auth import get_current_user
+from hireloop.apps.api.app.services.embedding.embedder import get_embedder
 from hireloop.apps.api.app.services.matching.retrieval import get_ranked_matches
 from hireloop.apps.api.app.services.matching.explainer import generate_match_explanation
 from hireloop.apps.api.app.schemas.matching import (
